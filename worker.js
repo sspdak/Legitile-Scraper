@@ -51,7 +51,6 @@ export default {
         const { year, biennium } = await request.json();
         if (!year || !biennium) return new Response(JSON.stringify({ error: "Missing year or biennium" }), { status: 400, headers: corsHeaders });
 
-        // Ask WSL API for every bill active this year
         const reqBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetLegislationByYear xmlns="http://WSLWebServices.leg.wa.gov/"><year>${year}</year></GetLegislationByYear></soap:Body></soap:Envelope>`;
 
         const res = await fetch("https://wslwebservices.leg.wa.gov/LegislationService.asmx", {
@@ -61,20 +60,15 @@ export default {
         });
         
         const xml = await res.text();
-        
-        // Extract all <BillNumber> tags and remove duplicates
         const matches = [...xml.matchAll(/<BillNumber>(\d+)<\/BillNumber>/g)];
         const uniqueBills = [...new Set(matches.map(m => m[1]))];
 
-        // D1 limits bulk inserts to 100 statements at a time. We build an array of statements.
         const stmt = env.DB.prepare("INSERT INTO scrape_queue (bill_number, biennium, status, last_attempt) VALUES (?, ?, 'pending', CURRENT_TIMESTAMP) ON CONFLICT(bill_number) DO NOTHING");
         const batch = [];
-        
         for (const bill of uniqueBills) {
             batch.push(stmt.bind(bill, biennium));
         }
         
-        // Execute the batch inserts in chunks of 100
         for (let i = 0; i < batch.length; i += 100) {
             await env.DB.batch(batch.slice(i, i + 100));
         }
@@ -114,31 +108,37 @@ export default {
       if (queueItems && queueItems.length > 0) {
         for (const item of queueItems) {
           try {
-            // 1. Dynamically ask the WSL API for the exact HTML links for this specific bill
-            const apiBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetLegislation xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${item.biennium}</biennium><billNumber>${item.bill_number}</billNumber></GetLegislation></soap:Body></soap:Envelope>`;
+            // 1. Ask the Document Service for all files related to this bill number
+            const justNum = item.bill_number.replace(/\D/g, ''); 
+            const docApiUrl = `https://wslwebservices.leg.wa.gov/legislativedocumentservice.asmx/GetDocuments?biennium=${item.biennium}&namedLike=${justNum}`;
             
-            const apiRes = await fetch("https://wslwebservices.leg.wa.gov/LegislationService.asmx", {
-              method: "POST",
-              headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "http://WSLWebServices.leg.wa.gov/GetLegislation" },
-              body: apiBody
-            });
-            
+            const apiRes = await fetch(docApiUrl);
             const xml = await apiRes.text();
             
-            // 2. Extract the <HtmUrl> tags
-            const htmMatches = [...xml.matchAll(/<HtmUrl>([^<]+)<\/HtmUrl>/g)];
+            // 2. Extract the HtmUrl, ensuring we only grab actual Bills (not amendments) that match our exact number
+            const documents = [...xml.matchAll(/<LegislativeDocument>([\s\S]*?)<\/LegislativeDocument>/g)];
+            let targetHtmUrl = null;
+
+            for (const doc of documents) {
+                const docText = doc[1];
+                const classMatch = docText.match(/<Class>([^<]+)<\/Class>/);
+                const nameMatch = docText.match(/<ShortFriendlyName>([^<]+)<\/ShortFriendlyName>/);
+                const htmMatch = docText.match(/<HtmUrl>([^<]+)<\/HtmUrl>/);
+                
+                // Check if it's a Bill, if the name ends with our exact bill number, and if it has an HTML link
+                if (classMatch && classMatch[1] === 'Bills' && nameMatch && nameMatch[1].endsWith(` ${justNum}`) && htmMatch) {
+                    targetHtmUrl = htmMatch[1].replace('http://', 'https://'); 
+                    // This loop will naturally overwrite older versions (Original) with newer versions (Substitute) because of the XML order
+                }
+            }
             
-            if (htmMatches.length === 0) {
-                 // No HTML found (likely a resolution or dead draft), mark and skip
+            if (!targetHtmUrl) {
                  await env.DB.prepare("UPDATE scrape_queue SET status = 'failed_no_html', last_attempt = CURRENT_TIMESTAMP WHERE bill_number = ?").bind(item.bill_number).run();
                  continue;
             }
 
-            // Grab the LAST url in the array. The state lists originals first, and substitutes/engrossed versions last.
-            const documentUrl = htmMatches[htmMatches.length - 1][1];
-
             // 3. Download the actual bill text
-            const docRes = await fetch(documentUrl);
+            const docRes = await fetch(targetHtmUrl);
             if (!docRes.ok) throw new Error(`HTTP ${docRes.status}`);
             const htmlText = await docRes.text();
             
