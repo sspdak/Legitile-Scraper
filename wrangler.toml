@@ -10,4 +10,4 @@ crons = ["*/5 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "legitile-search"
-database_id = "PASTE-YOUR-DATABASE-ID-HERE"
+database_id = "fe5a6bce-b065-4fd4-9373-57d5a2e5e551"
