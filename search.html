@@ -45,11 +45,13 @@
     </div>
 
 <script>
+    // Enforce login
     if (!localStorage.getItem('jwt_token')) window.location.href = 'index.html';
 
-    // Notice we are pointing directly to the SCRAPER worker, not your main API
+    // Target the scraper API, not the main LegiTile API
     const searchApiUrl = "https://legitile-scraper.ewing-jacob.workers.dev";
 
+    // Load Sidebar
     async function loadSidebar() {
         try {
             const response = await fetch('sidebar.html');
@@ -72,6 +74,7 @@
         await loadSidebar();
     };
 
+    // Execute Search
     async function runSearch() {
         const query = document.getElementById('searchInput').value.trim();
         const biennium = document.getElementById('searchBiennium').value;
@@ -94,11 +97,12 @@
             if (data.length === 0) {
                 resultsGrid.innerHTML = '<div class="text-gray-500 font-bold text-sm bg-white p-6 rounded-xl border border-gray-100">No matching bills found in the indexed database.</div>';
             } else {
+                // Render results with highlighted snippets
                 resultsGrid.innerHTML = data.map(item => `
                     <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition">
                         <div class="flex items-center justify-between mb-2">
                             <span class="text-lg font-black text-[#002e5d] block leading-tight">${item.bill_number}</span>
-                            <button onclick="window.location.href='tracker.html?autosearch=${item.bill_number}'" class="text-[9px] font-black uppercase text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1.5 rounded transition border border-blue-100">View / Track</button>
+                            <a href="https://app.leg.wa.gov/billsummary?BillNumber=${item.bill_number.replace(/\D/g, '')}&Year=${biennium.split('-')[0]}" target="_blank" class="text-[9px] font-black uppercase text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1.5 rounded transition border border-blue-100">Read Full Bill ➔</a>
                         </div>
                         <div class="text-sm text-gray-600 leading-relaxed bg-gray-50 p-3 rounded-lg border border-gray-200">
                             ...${item.match_snippet}...
@@ -107,7 +111,7 @@
                 `).join('');
             }
         } catch (e) {
-            resultsGrid.innerHTML = `<div class="text-red-500 font-bold text-sm bg-white p-6 rounded-xl border border-red-100">Error connecting to the search index. Ensure the scraper worker is running.</div>`;
+            resultsGrid.innerHTML = `<div class="text-red-500 font-bold text-sm bg-white p-6 rounded-xl border border-red-100">Error connecting to the search index.</div>`;
         }
 
         searchBtn.innerText = "Search";
