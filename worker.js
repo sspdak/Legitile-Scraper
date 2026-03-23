@@ -108,41 +108,34 @@ export default {
       if (queueItems && queueItems.length > 0) {
         for (const item of queueItems) {
           try {
-            // 1. Ask the Document Service for all files related to this bill number
-            const justNum = item.bill_number.replace(/\D/g, ''); 
-            const docApiUrl = `https://wslwebservices.leg.wa.gov/legislativedocumentservice.asmx/GetDocuments?biennium=${item.biennium}&namedLike=${justNum}`;
+            // Reverted back to the reliable GetLegislation API
+            const apiBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetLegislation xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${item.biennium}</biennium><billNumber>${item.bill_number}</billNumber></GetLegislation></soap:Body></soap:Envelope>`;
             
-            const apiRes = await fetch(docApiUrl);
+            const apiRes = await fetch("https://wslwebservices.leg.wa.gov/LegislationService.asmx", {
+              method: "POST",
+              headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "http://WSLWebServices.leg.wa.gov/GetLegislation" },
+              body: apiBody
+            });
+            
             const xml = await apiRes.text();
             
-            // 2. Extract the HtmUrl, ensuring we only grab actual Bills (not amendments) that match our exact number
-            const documents = [...xml.matchAll(/<LegislativeDocument>([\s\S]*?)<\/LegislativeDocument>/g)];
-            let targetHtmUrl = null;
-
-            for (const doc of documents) {
-                const docText = doc[1];
-                const classMatch = docText.match(/<Class>([^<]+)<\/Class>/);
-                const nameMatch = docText.match(/<ShortFriendlyName>([^<]+)<\/ShortFriendlyName>/);
-                const htmMatch = docText.match(/<HtmUrl>([^<]+)<\/HtmUrl>/);
-                
-                // Check if it's a Bill, if the name ends with our exact bill number, and if it has an HTML link
-                if (classMatch && classMatch[1] === 'Bills' && nameMatch && nameMatch[1].endsWith(` ${justNum}`) && htmMatch) {
-                    targetHtmUrl = htmMatch[1].replace('http://', 'https://'); 
-                    // This loop will naturally overwrite older versions (Original) with newer versions (Substitute) because of the XML order
-                }
-            }
+            // Forgiving Regex to find the HtmUrl
+            const htmMatches = [...xml.matchAll(/<HtmUrl[^>]*>([^<]+)<\//gi)];
             
-            if (!targetHtmUrl) {
+            if (htmMatches.length === 0) {
                  await env.DB.prepare("UPDATE scrape_queue SET status = 'failed_no_html', last_attempt = CURRENT_TIMESTAMP WHERE bill_number = ?").bind(item.bill_number).run();
                  continue;
             }
 
-            // 3. Download the actual bill text
-            const docRes = await fetch(targetHtmUrl);
+            // Grab the LAST url in the array (ensures we get the substitute/latest version)
+            const documentUrl = htmMatches[htmMatches.length - 1][1].replace('http://', 'https://');
+
+            // Download the actual bill text
+            const docRes = await fetch(documentUrl);
             if (!docRes.ok) throw new Error(`HTTP ${docRes.status}`);
             const htmlText = await docRes.text();
             
-            // 4. Strip out the HTML structure to leave just raw, searchable text
+            // Strip out the HTML structure to leave just raw, searchable text
             const cleanText = htmlText
                 .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
                 .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
@@ -150,7 +143,7 @@ export default {
                 .replace(/\s+/g, ' ')
                 .trim();
 
-            // 5. Overwrite the old text in the search database with the fresh text
+            // Overwrite the old text in the search database with the fresh text
             await env.DB.prepare("DELETE FROM bill_texts WHERE bill_number = ? AND biennium = ?").bind(item.bill_number, item.biennium).run();
             await env.DB.prepare("INSERT INTO bill_texts (bill_number, biennium, full_text) VALUES (?, ?, ?)").bind(item.bill_number, item.biennium, cleanText).run();
             
