@@ -70,6 +70,37 @@ export default {
       }
     }
 
+    // --- 1.6 PROXY ENDPOINT FOR BILL STATUS (Bypasses CORS) ---
+    if (request.method === "GET" && url.pathname === "/get-bill-status") {
+      const billNumber = url.searchParams.get("billNumber");
+      const biennium = url.searchParams.get("biennium") || "2025-26";
+
+      if (!billNumber) return new Response(JSON.stringify({ error: "Missing bill number" }), { status: 400, headers: corsHeaders });
+
+      try {
+        const reqBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetLegislation xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${biennium}</biennium><billNumber>${billNumber.replace(/\D/g, '')}</billNumber></GetLegislation></soap:Body></soap:Envelope>`;
+        
+        const apiRes = await fetch("https://wslwebservices.leg.wa.gov/LegislationService.asmx", {
+          method: "POST",
+          headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "http://WSLWebServices.leg.wa.gov/GetLegislation" },
+          body: reqBody
+        });
+        
+        const xml = await apiRes.text();
+        
+        // Parse the XML directly on the server to save the front-end some work
+        const sponsorMatch = xml.match(/<SponsorName>([^<]+)<\/SponsorName>/) || xml.match(/<LongFriendlyName>([^<]+)<\/LongFriendlyName>/);
+        const statusMatches = [...xml.matchAll(/<HistoryLine>([^<]+)<\/HistoryLine>/g)];
+        
+        const sponsor = sponsorMatch ? sponsorMatch[1] : "Unknown";
+        const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1] : "Unknown";
+        
+        return new Response(JSON.stringify({ sponsor, status }), { headers: corsHeaders });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+      }
+    }
+
     // --- 2. THE MASTER AUTO-FEEDER ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
