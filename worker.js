@@ -88,12 +88,15 @@ export default {
         
         const xml = await apiRes.text();
         
-        // Parse the XML directly on the server to save the front-end some work
-        const sponsorMatch = xml.match(/<SponsorName>([^<]+)<\/SponsorName>/) || xml.match(/<LongFriendlyName>([^<]+)<\/LongFriendlyName>/);
-        const statusMatches = [...xml.matchAll(/<HistoryLine>([^<]+)<\/HistoryLine>/g)];
+        // Parse the XML with highly forgiving regex for WA State's varying formats
+        const sponsorMatch = xml.match(/<LongFriendlyName[^>]*>([^<]+)<\/LongFriendlyName>/i) || 
+                             xml.match(/<Name[^>]*>([^<]+)<\/Name>/i) || 
+                             xml.match(/<SponsorName[^>]*>([^<]+)<\/SponsorName>/i);
+                             
+        const statusMatches = [...xml.matchAll(/<HistoryLine[^>]*>([^<]+)<\/HistoryLine>/gi)];
         
-        const sponsor = sponsorMatch ? sponsorMatch[1] : "Unknown";
-        const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1] : "Unknown";
+        const sponsor = sponsorMatch ? sponsorMatch[1] : "Not Listed";
+        const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1] : "Status Unavailable";
         
         return new Response(JSON.stringify({ sponsor, status }), { headers: corsHeaders });
       } catch (e) {
