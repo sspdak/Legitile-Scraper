@@ -104,6 +104,32 @@ export default {
       }
     }
 
+    // --- 1.7 SAVED QUERIES (D1 Database Storage) ---
+    if (url.pathname === "/saved-queries") {
+      if (request.method === "GET") {
+        try {
+          const { results } = await env.DB.prepare("SELECT query_text FROM saved_queries ORDER BY id DESC").all();
+          return new Response(JSON.stringify(results.map(r => r.query_text)), { headers: corsHeaders });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+        }
+      }
+      
+      if (request.method === "POST") {
+        try {
+          const { action, query } = await request.json();
+          if (action === "save" && query) {
+            await env.DB.prepare("INSERT OR IGNORE INTO saved_queries (query_text) VALUES (?)").bind(query).run();
+          } else if (action === "clear") {
+            await env.DB.prepare("DELETE FROM saved_queries").run();
+          }
+          return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+        }
+      }
+    }
+
     // --- 2. THE MASTER AUTO-FEEDER ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
