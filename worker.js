@@ -45,6 +45,31 @@ export default {
       }
     }
 
+    // --- 1.5 REPORT ENDPOINT (Returns full text for section extraction) ---
+    if (request.method === "GET" && url.pathname === "/generate-report") {
+      const query = url.searchParams.get("q");
+      const biennium = url.searchParams.get("biennium") || "2025-26";
+
+      if (!query) return new Response(JSON.stringify({ error: "Missing query" }), { status: 400, headers: corsHeaders });
+
+      try {
+        const ftsQuery = `"${query.replace(/"/g, '""')}"`; 
+        
+        const sql = `
+          SELECT bill_number, full_text 
+          FROM bill_texts 
+          WHERE biennium = ? AND bill_texts MATCH ? 
+          ORDER BY rank 
+          LIMIT 100
+        `;
+        
+        const { results } = await env.DB.prepare(sql).bind(biennium, ftsQuery).all();
+        return new Response(JSON.stringify(results), { headers: corsHeaders });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+      }
+    }
+
     // --- 2. THE MASTER AUTO-FEEDER ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
