@@ -128,14 +128,15 @@ export default {
         
         const xml = await apiRes.text();
         
-        // Aggressive regex to ignore XML namespaces and attributes
-        const sponsorMatch = xml.match(/<[^>]*?SponsorName[^>]*?>\s*([^<]+)\s*</i) || 
-                             xml.match(/<[^>]*?LongFriendlyName[^>]*?>\s*([^<]+)\s*</i) ||
-                             xml.match(/<[^>]*?Name[^>]*?>\s*([^<]+)\s*</i);
+       // Inescapable regex: Checks for every known WA State XML sponsor tag variation
+        const sponsorMatch = xml.match(/<[^>]*?OriginalSponsor[^>]*?>\s*([^<]+)\s*<\//i) || 
+                             xml.match(/<[^>]*?SponsorName[^>]*?>\s*([^<]+)\s*<\//i) ||
+                             xml.match(/<[^>]*?Sponsor[^>]*?>\s*([^<]+)\s*<\//i) ||
+                             xml.match(/<[^>]*?LongFriendlyName[^>]*?>\s*([^<]+)\s*<\//i);
                              
-        const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*</gi)];
+        const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//gi)];
         
-        const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].trim() : "Not Listed";
+        const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].trim() : "Unknown";
         const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1].trim() : "Status Unavailable";
         
         return new Response(JSON.stringify({ sponsor, status }), { headers: corsHeaders });
