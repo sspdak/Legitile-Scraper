@@ -90,14 +90,22 @@
         try {
             const res = await fetch(`${searchApiUrl}/search?q=${encodeURIComponent(query)}&biennium=${encodeURIComponent(biennium)}`);
             
-            if (!res.ok) throw new Error("Search API failed");
+            // DIAGNOSTIC UPDATE: Grab the raw text FIRST instead of immediately parsing JSON
+            const rawText = await res.text(); 
             
-            const data = await res.json();
+            let data;
+            try {
+                data = JSON.parse(rawText);
+            } catch (parseError) {
+                // If parsing fails, throw the raw text to the screen so we can read the exact error CF is sending
+                throw new Error(`The server returned plain text instead of data: <br><br> <span class="text-gray-500 font-mono text-xs">${rawText}</span>`);
+            }
+
+            if (!res.ok || data.error) throw new Error(data.error || "Search API failed");
 
             if (data.length === 0) {
                 resultsGrid.innerHTML = '<div class="text-gray-500 font-bold text-sm bg-white p-6 rounded-xl border border-gray-100">No matching bills found in the indexed database.</div>';
             } else {
-                // Render results with highlighted snippets
                 resultsGrid.innerHTML = data.map(item => `
                     <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition">
                         <div class="flex items-center justify-between mb-2">
@@ -111,7 +119,7 @@
                 `).join('');
             }
         } catch (e) {
-            resultsGrid.innerHTML = `<div class="text-red-500 font-bold text-sm bg-white p-6 rounded-xl border border-red-100">Error connecting to the search index.</div>`;
+            resultsGrid.innerHTML = `<div class="text-red-500 font-bold text-sm bg-white p-6 rounded-xl border border-red-100">${e.message}</div>`;
         }
 
         searchBtn.innerText = "Search";
