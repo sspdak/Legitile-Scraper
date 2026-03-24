@@ -136,7 +136,8 @@ export default {
                              
         const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//gi)];
         
-        const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].trim() : "Unknown";
+        // NEW: Added .replace(/[()]/g, '') to strip out any parentheses from the state's XML
+        const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].replace(/[()]/g, '').trim() : "Unknown";
         const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1].trim() : "Status Unavailable";
         
         return new Response(JSON.stringify({ sponsor, status }), { headers: corsHeaders });
