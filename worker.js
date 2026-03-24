@@ -2,7 +2,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     
-    // Handle CORS for browser requests
+    // Handle CORS
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -45,41 +45,71 @@ export default {
       }
     }
 
-    // --- 2. AUTO-FEEDER: BUILD ENTIRE DATABASE ---
+    // --- 2. THE MASTER AUTO-FEEDER ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
-        const { year, biennium } = await request.json();
-        if (!year || !biennium) return new Response(JSON.stringify({ error: "Missing year or biennium" }), { status: 400, headers: corsHeaders });
+        const { biennium } = await request.json();
+        if (!biennium) return new Response(JSON.stringify({ error: "Missing biennium" }), { status: 400, headers: corsHeaders });
 
-        const reqBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetLegislationByYear xmlns="http://WSLWebServices.leg.wa.gov/"><year>${year}</year></GetLegislationByYear></soap:Body></soap:Envelope>`;
+        // Fetch the master list of EVERY bill document for the biennium
+        const reqBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetAllDocumentsByClass xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${biennium}</biennium><documentClass>Bills</documentClass></GetAllDocumentsByClass></soap:Body></soap:Envelope>`;
 
-        const res = await fetch("https://wslwebservices.leg.wa.gov/LegislationService.asmx", {
+        const res = await fetch("https://wslwebservices.leg.wa.gov/legislativedocumentservice.asmx", {
           method: "POST",
-          headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "http://WSLWebServices.leg.wa.gov/GetLegislationByYear" },
+          headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "http://WSLWebServices.leg.wa.gov/GetAllDocumentsByClass" },
           body: reqBody
         });
         
         const xml = await res.text();
-        const matches = [...xml.matchAll(/<BillNumber>(\d+)<\/BillNumber>/g)];
-        const uniqueBills = [...new Set(matches.map(m => m[1]))];
+        
+        // Extract all HTML URLs from the massive payload
+        const urlMatches = [...xml.matchAll(/<HtmUrl[^>]*>([^<]+)<\//gi)].map(m => m[1]);
+        const billMap = new Map();
 
-        const stmt = env.DB.prepare("INSERT INTO scrape_queue (bill_number, biennium, status, last_attempt) VALUES (?, ?, 'pending', CURRENT_TIMESTAMP) ON CONFLICT(bill_number) DO NOTHING");
+        for (const rawUrl of urlMatches) {
+            const htmUrl = rawUrl.replace('http://', 'https://');
+            const fileMatch = htmUrl.match(/\/([^/]+\.htm)$/i);
+            
+            if (fileMatch) {
+                const fileName = fileMatch[1];
+                const numMatch = fileName.match(/^(\d{4})/); // Gets the 4 digit bill number
+                
+                if (numMatch) {
+                    const billNum = numMatch[1];
+                    // Save the longest filename for each bill (Substitute/Engrossed suffixes make it longer)
+                    if (!billMap.has(billNum) || fileName.length > billMap.get(billNum).fileName.length) {
+                        billMap.set(billNum, { url: htmUrl, fileName: fileName });
+                    }
+                }
+            }
+        }
+
+        // Insert exactly one URL per bill into the database queue
         const batch = [];
-        for (const bill of uniqueBills) {
-            batch.push(stmt.bind(bill, biennium));
+        const stmt = env.DB.prepare(`
+            INSERT INTO scrape_queue (bill_number, biennium, document_url, status, last_attempt) 
+            VALUES (?, ?, ?, 'pending', CURRENT_TIMESTAMP) 
+            ON CONFLICT(bill_number) DO UPDATE SET 
+                status = CASE WHEN scrape_queue.document_url != excluded.document_url THEN 'pending' ELSE scrape_queue.status END,
+                document_url = excluded.document_url,
+                last_attempt = CURRENT_TIMESTAMP
+        `);
+
+        for (const [billNum, data] of billMap.entries()) {
+            batch.push(stmt.bind(billNum, biennium, data.url));
         }
         
         for (let i = 0; i < batch.length; i += 100) {
             await env.DB.batch(batch.slice(i, i + 100));
         }
 
-        return new Response(JSON.stringify({ success: true, total_bills_queued: uniqueBills.length }), { headers: corsHeaders });
+        return new Response(JSON.stringify({ success: true, total_unique_bills_queued: billMap.size }), { headers: corsHeaders });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
       }
     }
 
-    // --- 3. EXISTING WEBHOOK: ADD SINGLE BILL TO QUEUE ---
+    // --- 3. WEBHOOK FALLBACK (If you add a bill manually) ---
     if (request.method === "POST" && url.pathname === "/add-to-queue") {
       try {
         const data = await request.json();
@@ -100,7 +130,7 @@ export default {
 
   async scheduled(event, env, ctx) {
     try {
-      // Grab up to 3 pending bills from the queue
+      // 1. Grab up to 3 pending bills from the queue
       const { results: queueItems } = await env.DB.prepare(
         "SELECT * FROM scrape_queue WHERE status = 'pending' LIMIT 3"
       ).all();
@@ -108,34 +138,22 @@ export default {
       if (queueItems && queueItems.length > 0) {
         for (const item of queueItems) {
           try {
-            // Reverted back to the reliable GetLegislation API
-            const apiBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetLegislation xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${item.biennium}</biennium><billNumber>${item.bill_number}</billNumber></GetLegislation></soap:Body></soap:Envelope>`;
+            // Priority 1: Use the exact URL we found in the master list
+            let targetUrl = item.document_url;
             
-            const apiRes = await fetch("https://wslwebservices.leg.wa.gov/LegislationService.asmx", {
-              method: "POST",
-              headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "http://WSLWebServices.leg.wa.gov/GetLegislation" },
-              body: apiBody
-            });
-            
-            const xml = await apiRes.text();
-            
-            // Forgiving Regex to find the HtmUrl
-            const htmMatches = [...xml.matchAll(/<HtmUrl[^>]*>([^<]+)<\//gi)];
-            
-            if (htmMatches.length === 0) {
-                 await env.DB.prepare("UPDATE scrape_queue SET status = 'failed_no_html', last_attempt = CURRENT_TIMESTAMP WHERE bill_number = ?").bind(item.bill_number).run();
-                 continue;
+            // Priority 2: If no URL (added via webhook before bulk sync), guess the original URL
+            if (!targetUrl) {
+                const justNum = parseInt(item.bill_number.replace(/\D/g, ''));
+                const chamberFolder = justNum < 5000 ? "House%20Bills" : "Senate%20Bills";
+                targetUrl = `https://lawfilesext.leg.wa.gov/biennium/${item.biennium}/Htm/Bills/${chamberFolder}/${justNum}.htm`;
             }
 
-            // Grab the LAST url in the array (ensures we get the substitute/latest version)
-            const documentUrl = htmMatches[htmMatches.length - 1][1].replace('http://', 'https://');
-
-            // Download the actual bill text
-            const docRes = await fetch(documentUrl);
+            // 2. Download the text directly
+            const docRes = await fetch(targetUrl);
             if (!docRes.ok) throw new Error(`HTTP ${docRes.status}`);
             const htmlText = await docRes.text();
             
-            // Strip out the HTML structure to leave just raw, searchable text
+            // 3. Strip HTML
             const cleanText = htmlText
                 .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
                 .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
@@ -143,16 +161,16 @@ export default {
                 .replace(/\s+/g, ' ')
                 .trim();
 
-            // Overwrite the old text in the search database with the fresh text
+            // 4. Save to database
             await env.DB.prepare("DELETE FROM bill_texts WHERE bill_number = ? AND biennium = ?").bind(item.bill_number, item.biennium).run();
             await env.DB.prepare("INSERT INTO bill_texts (bill_number, biennium, full_text) VALUES (?, ?, ?)").bind(item.bill_number, item.biennium, cleanText).run();
             
-            // Mark as finished in the queue
+            // 5. Mark finished
             await env.DB.prepare("UPDATE scrape_queue SET status = 'scraped', last_attempt = CURRENT_TIMESTAMP WHERE bill_number = ?").bind(item.bill_number).run();
 
           } catch (scrapeError) {
             console.error(`Failed to scrape ${item.bill_number}:`, scrapeError);
-            await env.DB.prepare("UPDATE scrape_queue SET status = 'failed', last_attempt = CURRENT_TIMESTAMP WHERE bill_number = ?").bind(item.bill_number).run();
+            await env.DB.prepare("UPDATE scrape_queue SET status = 'failed_no_html', last_attempt = CURRENT_TIMESTAMP WHERE bill_number = ?").bind(item.bill_number).run();
           }
         }
       }
