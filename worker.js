@@ -87,7 +87,7 @@ export default {
       }
     }
 
-    // --- 1.5 REPORT ENDPOINT ---
+// --- 1.5 REPORT ENDPOINT ---
     if (request.method === "GET" && url.pathname === "/generate-report") {
       const query = url.searchParams.get("q");
       const biennium = url.searchParams.get("biennium") || "2025-26";
@@ -96,11 +96,14 @@ export default {
 
       try {
         const ftsQuery = `"${query.replace(/"/g, '""')}"`; 
+        
+        // NEW: We added a LEFT JOIN to pull the exact URL from the scrape_queue table
         const sql = `
-          SELECT bill_number, full_text 
-          FROM bill_texts 
-          WHERE biennium = ? AND bill_texts MATCH ? 
-          ORDER BY rank 
+          SELECT t.bill_number, t.full_text, q.url 
+          FROM bill_texts t 
+          LEFT JOIN scrape_queue q ON t.bill_number = q.bill_number AND t.biennium = q.biennium 
+          WHERE t.biennium = ? AND t.bill_texts MATCH ? 
+          ORDER BY t.rank 
           LIMIT 100
         `;
         const { results } = await env.DB.prepare(sql).bind(biennium, ftsQuery).all();
