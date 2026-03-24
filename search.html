@@ -45,13 +45,11 @@
     </div>
 
 <script>
-    // Enforce login
     if (!localStorage.getItem('jwt_token')) window.location.href = 'index.html';
 
     // Target the scraper API, not the main LegiTile API
     const searchApiUrl = "https://legitile-scraper.ewing-jacob.workers.dev";
 
-    // Load Sidebar
     async function loadSidebar() {
         try {
             const response = await fetch('sidebar.html');
@@ -74,7 +72,6 @@
         await loadSidebar();
     };
 
-    // Execute Search
     async function runSearch() {
         const query = document.getElementById('searchInput').value.trim();
         const biennium = document.getElementById('searchBiennium').value;
@@ -88,17 +85,14 @@
         resultsGrid.innerHTML = '<div class="text-blue-500 font-bold text-sm italic">Querying database...</div>';
 
         try {
-            // Added a cache-buster (&t=...) so the browser is FORCED to fetch a fresh response from the API
-            const res = await fetch(`${searchApiUrl}/search?q=${encodeURIComponent(query)}&biennium=${encodeURIComponent(biennium)}&t=${Date.now()}`);
+            const res = await fetch(`${searchApiUrl}/search?q=${encodeURIComponent(query)}&biennium=${encodeURIComponent(biennium)}`);
             
             const rawText = await res.text(); 
-            console.log("RAW SERVER RESPONSE:", rawText); // Prints to console just in case
             
             let data;
             try {
                 data = JSON.parse(rawText);
             } catch (parseError) {
-                // If it's not JSON, throw it directly to the UI
                 throw new Error(`The server returned plain text instead of data: <br><br> <span class="text-gray-500 font-mono text-xs">${rawText}</span>`);
             }
 
@@ -120,7 +114,6 @@
                 `).join('');
             }
         } catch (e) {
-            // This displays the error right on the web page in a red box
             resultsGrid.innerHTML = `<div class="text-red-500 font-bold text-sm bg-white p-6 rounded-xl border border-red-100">${e.message}</div>`;
         }
 
