@@ -220,11 +220,12 @@ export default {
           ).bind(item.id)
         ]);
 
-      } catch (error) {
-        await env.DB.prepare(
-          "UPDATE scrape_queue SET status = 'failed' WHERE id = ?"
-        ).bind(item.id).run();
-      }
+} catch (error) {
+  console.error(`Failed to scrape ${item.bill_number}:`, error.message);
+  await env.DB.prepare(
+    "UPDATE scrape_queue SET status = 'failed' WHERE id = ?"
+  ).bind(item.id).run();
+}
     }
   }
 };
