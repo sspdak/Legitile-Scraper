@@ -35,13 +35,12 @@ export default {
       }
     }
 
-   // --- 1.2 MASTER AUTO-FEEDER ---
+ // --- 1.2 MASTER AUTO-FEEDER ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
         const { biennium } = await request.json();
         if (!biennium) throw new Error("Missing biennium");
 
-        // Use the correct HTM directories, not the PDF directory
         const directories = [
           `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/House%20Bills/`,
           `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/Senate%20Bills/`,
@@ -60,7 +59,13 @@ export default {
           let match;
 
           while ((match = regex.exec(html)) !== null) {
-            const fileName = match[1];
+            const fileHref = match[1]; // Gets the raw link, e.g., "/biennium/.../1000.htm"
+            
+            // Restoring your logic: splitting by slash to isolate just the file name
+            const parts = fileHref.split('/');
+            const fileName = parts[parts.length - 1]; 
+            
+            // Now this correctly checks "1000.htm" instead of the whole path
             const billNumMatch = fileName.match(/^(\d{4})/);
 
             if (billNumMatch) {
@@ -68,7 +73,8 @@ export default {
               if (!uniqueBills.has(billNum) || fileName.length > uniqueBills.get(billNum).fileName.length) {
                 uniqueBills.set(billNum, {
                   billNumber: billNum,
-                  url: `${dirUrl}${fileName}`,
+                  // Ensure we build the full URL correctly whether the state uses absolute or relative paths
+                  url: fileHref.startsWith('/') ? `https://lawfilesext.leg.wa.gov${fileHref}` : `${dirUrl}${fileHref}`,
                   fileName: fileName,
                   biennium: biennium
                 });
