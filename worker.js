@@ -41,7 +41,6 @@ export default {
         const { biennium } = await request.json();
         if (!biennium) throw new Error("Missing biennium");
 
-        // Scan the actual subdirectories where the state stores the HTML files
         const directories = [
           `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/House%20Bills/`,
           `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/Senate%20Bills/`,
@@ -51,12 +50,12 @@ export default {
 
         const uniqueBills = new Map();
         const regex = /href="([^"]+\.htm)"/gi;
-        const fetchErrors = []; // NEW: Array to collect connection errors
+        const fetchErrors = []; // Array to collect connection errors
 
         for (const dirUrl of directories) {
           const res = await fetch(dirUrl);
           if (!res.ok) {
-            // NEW: Instead of silently skipping, record the HTTP status
+            // Instead of silently skipping, record the HTTP status
             fetchErrors.push(`Blocked reading ${dirUrl}: HTTP ${res.status}`);
             continue; 
           }
@@ -96,12 +95,15 @@ export default {
         }
         if (batch.length > 0) await env.DB.batch(batch);
 
-        // NEW: Include the fetchErrors array in the output
         return new Response(JSON.stringify({ 
           success: true, 
           total_unique_bills_queued: uniqueBills.size,
           diagnostics: fetchErrors 
         }), { headers: corsHeaders });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+      }
+    }
 
 // --- 1.5 REPORT ENDPOINT ---
     if (request.method === "GET" && url.pathname === "/generate-report") {
@@ -113,7 +115,6 @@ export default {
       try {
         const ftsQuery = `"${query.replace(/"/g, '""')}"`; 
         
-        // NEW: We added a LEFT JOIN to pull the exact URL from the scrape_queue table
         const sql = `
           SELECT t.bill_number, t.full_text, q.url 
           FROM bill_texts t 
@@ -147,7 +148,6 @@ export default {
         
         const xml = await apiRes.text();
         
-       // Inescapable regex: Checks for every known WA State XML sponsor tag variation
         const sponsorMatch = xml.match(/<[^>]*?OriginalSponsor[^>]*?>\s*([^<]+)\s*<\//i) || 
                              xml.match(/<[^>]*?SponsorName[^>]*?>\s*([^<]+)\s*<\//i) ||
                              xml.match(/<[^>]*?Sponsor[^>]*?>\s*([^<]+)\s*<\//i) ||
@@ -155,7 +155,6 @@ export default {
                              
         const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//gi)];
         
-        // NEW: Added .replace(/[()]/g, '') to strip out any parentheses from the state's XML
         const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].replace(/[()]/g, '').trim() : "Unknown";
         const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1].trim() : "Status Unavailable";
         
@@ -196,7 +195,6 @@ export default {
 
   // --- 2. THE BACKGROUND CRON JOB ---
   async scheduled(event, env, ctx) {
-    // Limited to 2 for higher frequency runs
     const { results: queueItems } = await env.DB.prepare(
       "SELECT * FROM scrape_queue WHERE status = 'pending' LIMIT 2"
     ).all();
@@ -225,12 +223,11 @@ export default {
           ).bind(item.id)
         ]);
 
-} catch (error) {
-  console.error(`Failed to scrape ${item.bill_number}:`, error.message);
-  await env.DB.prepare(
-    "UPDATE scrape_queue SET status = 'failed' WHERE id = ?"
-  ).bind(item.id).run();
-}
+      } catch (error) {
+        await env.DB.prepare(
+          "UPDATE scrape_queue SET status = 'failed' WHERE id = ?"
+        ).bind(item.id).run();
+      }
     }
   }
 };
