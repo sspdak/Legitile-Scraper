@@ -35,71 +35,24 @@ export default {
       }
     }
 
- // --- 1.2 MASTER AUTO-FEEDER ---
+ // --- 1.2 MASTER AUTO-FEEDER (X-RAY MODE) ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
-        const { biennium } = await request.json();
-        if (!biennium) throw new Error("Missing biennium");
-
-        const directories = [
-          `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/House%20Bills/`,
-          `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/Senate%20Bills/`,
-          `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/House%20Passed%20Legislature/`,
-          `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/Senate%20Passed%20Legislature/`
-        ];
-
-        const uniqueBills = new Map();
-        const regex = /href="([^"]+\.htm)"/gi;
-
-        for (const dirUrl of directories) {
-          const res = await fetch(dirUrl);
-          if (!res.ok) continue; 
-          
-          const html = await res.text();
-          let match;
-
-          while ((match = regex.exec(html)) !== null) {
-            const fileHref = match[1]; // Gets the raw link, e.g., "/biennium/.../1000.htm"
-            
-            // Restoring your logic: splitting by slash to isolate just the file name
-            const parts = fileHref.split('/');
-            const fileName = parts[parts.length - 1]; 
-            
-            // Now this correctly checks "1000.htm" instead of the whole path
-            const billNumMatch = fileName.match(/^(\d{4})/);
-
-            if (billNumMatch) {
-              const billNum = billNumMatch[1];
-              if (!uniqueBills.has(billNum) || fileName.length > uniqueBills.get(billNum).fileName.length) {
-                uniqueBills.set(billNum, {
-                  billNumber: billNum,
-                  // Ensure we build the full URL correctly whether the state uses absolute or relative paths
-                  url: fileHref.startsWith('/') ? `https://lawfilesext.leg.wa.gov${fileHref}` : `${dirUrl}${fileHref}`,
-                  fileName: fileName,
-                  biennium: biennium
-                });
-              }
-            }
-          }
-        }
-
-        const insertStmt = env.DB.prepare(
-          "INSERT OR REPLACE INTO scrape_queue (bill_number, url, biennium, status) VALUES (?, ?, ?, 'pending')"
-        );
+        const testUrl = "https://lawfilesext.leg.wa.gov/biennium/2025-26/Htm/Bills/Senate%20Bills/";
         
-        const batch = [];
-        for (const bill of uniqueBills.values()) {
-          batch.push(insertStmt.bind(bill.billNumber, bill.url, bill.biennium));
-          if (batch.length === 50) {
-            await env.DB.batch(batch);
-            batch.length = 0;
+        // Fetching the directory with a standard browser User-Agent
+        const res = await fetch(testUrl, {
+          headers: { 
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" 
           }
-        }
-        if (batch.length > 0) await env.DB.batch(batch);
-
-        return new Response(JSON.stringify({ success: true, total_unique_bills_queued: uniqueBills.size }), { headers: corsHeaders });
+        });
+        
+        const html = await res.text();
+        
+        // We are returning the RAW webpage text back to you in the dashboard
+        return new Response(html, { headers: { "Content-Type": "text/plain", ...corsHeaders } });
       } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+         return new Response(e.message, { status: 500, headers: corsHeaders });
       }
     }
 
