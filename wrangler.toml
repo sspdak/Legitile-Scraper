@@ -2,17 +2,7 @@ name = "legitile-scraper"
 main = "worker.js"
 compatibility_date = "2024-03-20"
 
-# Tell Cloudflare to run this worker every 5 minutes
-[triggers]
-crons = ["*/5 * * * *"]
-
-# Connect to your newly created Search Database
 [[d1_databases]]
 binding = "DB"
 database_name = "legitile-search"
 database_id = "fe5a6bce-b065-4fd4-9373-57d5a2e5e551"
-
-[observability]
-[observability.logs]
-enabled = true
-invocation_logs = true
