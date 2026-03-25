@@ -35,28 +35,28 @@ export default {
       }
     }
 
- // --- 1.2 MASTER AUTO-FEEDER (X-RAY MODE) ---
+    // --- 1.2 MASTER AUTO-FEEDER (X-RAY MODE) ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
         const testUrl = "https://lawfilesext.leg.wa.gov/biennium/2025-26/Htm/Bills/Senate%20Bills/";
         
-        // Fetching the directory with a standard browser User-Agent
+        // Fetching the directory with a standard browser User-Agent to mimic a real user
         const res = await fetch(testUrl, {
           headers: { 
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" 
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" 
           }
         });
         
         const html = await res.text();
         
-        // We are returning the RAW webpage text back to you in the dashboard
+        // Return the RAW webpage text back to you in the dashboard
         return new Response(html, { headers: { "Content-Type": "text/plain", ...corsHeaders } });
       } catch (e) {
          return new Response(e.message, { status: 500, headers: corsHeaders });
       }
     }
 
-// --- 1.5 REPORT ENDPOINT ---
+    // --- 1.5 REPORT ENDPOINT ---
     if (request.method === "GET" && url.pathname === "/generate-report") {
       const query = url.searchParams.get("q");
       const biennium = url.searchParams.get("biennium") || "2025-26";
@@ -66,7 +66,6 @@ export default {
       try {
         const ftsQuery = `"${query.replace(/"/g, '""')}"`; 
         
-        // NEW: We added a LEFT JOIN to pull the exact URL from the scrape_queue table
         const sql = `
           SELECT t.bill_number, t.full_text, q.url 
           FROM bill_texts t 
@@ -100,7 +99,6 @@ export default {
         
         const xml = await apiRes.text();
         
-       // Inescapable regex: Checks for every known WA State XML sponsor tag variation
         const sponsorMatch = xml.match(/<[^>]*?OriginalSponsor[^>]*?>\s*([^<]+)\s*<\//i) || 
                              xml.match(/<[^>]*?SponsorName[^>]*?>\s*([^<]+)\s*<\//i) ||
                              xml.match(/<[^>]*?Sponsor[^>]*?>\s*([^<]+)\s*<\//i) ||
@@ -108,7 +106,6 @@ export default {
                              
         const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//gi)];
         
-        // NEW: Added .replace(/[()]/g, '') to strip out any parentheses from the state's XML
         const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].replace(/[()]/g, '').trim() : "Unknown";
         const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1].trim() : "Status Unavailable";
         
@@ -149,7 +146,6 @@ export default {
 
   // --- 2. THE BACKGROUND CRON JOB ---
   async scheduled(event, env, ctx) {
-    // Limited to 2 for higher frequency runs
     const { results: queueItems } = await env.DB.prepare(
       "SELECT * FROM scrape_queue WHERE status = 'pending' LIMIT 2"
     ).all();
