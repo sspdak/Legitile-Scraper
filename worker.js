@@ -41,28 +41,39 @@ export default {
         const { biennium } = await request.json();
         if (!biennium) throw new Error("Missing biennium");
 
-        const listUrl = `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Pdf/Bills/`;
-        const res = await fetch(listUrl);
-        const html = await res.text();
+        // Scan the actual subdirectories where the state stores the HTML files
+        const directories = [
+          `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/House%20Bills/`,
+          `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/Senate%20Bills/`,
+          `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/House%20Passed%20Legislature/`,
+          `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/Senate%20Passed%20Legislature/`
+        ];
 
-        const regex = /href="([^"]+\.htm)"/g;
-        let match;
         const uniqueBills = new Map();
+        const regex = /href="([^"]+\.htm)"/gi;
 
-        while ((match = regex.exec(html)) !== null) {
-          const fileUrl = match[1];
-          const parts = fileUrl.split('/');
-          const fileName = parts[parts.length - 1];
-          const billNumMatch = fileName.match(/^(\d{4})/);
+        for (const dirUrl of directories) {
+          const res = await fetch(dirUrl);
+          if (!res.ok) continue; // Skip if directory doesn't exist yet
+          
+          const html = await res.text();
+          let match;
 
-          if (billNumMatch && fileUrl.includes("Bills")) {
-            const billNum = billNumMatch[1];
-            if (!uniqueBills.has(billNum) || fileName.length > uniqueBills.get(billNum).fileName.length) {
-              uniqueBills.set(billNum, {
-                billNumber: billNum,
-                url: `https://lawfilesext.leg.wa.gov${fileUrl}`,
-                fileName: fileName
-              });
+          while ((match = regex.exec(html)) !== null) {
+            const fileName = match[1];
+            const billNumMatch = fileName.match(/^(\d{4})/);
+
+            if (billNumMatch) {
+              const billNum = billNumMatch[1];
+              // Keep the version with the longest file name (Substitute, Engrossed, etc.)
+              if (!uniqueBills.has(billNum) || fileName.length > uniqueBills.get(billNum).fileName.length) {
+                uniqueBills.set(billNum, {
+                  billNumber: billNum,
+                  url: `${dirUrl}${fileName}`,
+                  fileName: fileName,
+                  biennium: biennium
+                });
+              }
             }
           }
         }
@@ -73,7 +84,7 @@ export default {
         
         const batch = [];
         for (const bill of uniqueBills.values()) {
-          batch.push(insertStmt.bind(bill.billNumber, bill.url, biennium));
+          batch.push(insertStmt.bind(bill.billNumber, bill.url, bill.biennium));
           if (batch.length === 50) {
             await env.DB.batch(batch);
             batch.length = 0;
