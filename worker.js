@@ -51,10 +51,15 @@ export default {
 
         const uniqueBills = new Map();
         const regex = /href="([^"]+\.htm)"/gi;
+        const fetchErrors = []; // NEW: Array to collect connection errors
 
         for (const dirUrl of directories) {
           const res = await fetch(dirUrl);
-          if (!res.ok) continue; // Skip if directory doesn't exist yet
+          if (!res.ok) {
+            // NEW: Instead of silently skipping, record the HTTP status
+            fetchErrors.push(`Blocked reading ${dirUrl}: HTTP ${res.status}`);
+            continue; 
+          }
           
           const html = await res.text();
           let match;
@@ -65,7 +70,6 @@ export default {
 
             if (billNumMatch) {
               const billNum = billNumMatch[1];
-              // Keep the version with the longest file name (Substitute, Engrossed, etc.)
               if (!uniqueBills.has(billNum) || fileName.length > uniqueBills.get(billNum).fileName.length) {
                 uniqueBills.set(billNum, {
                   billNumber: billNum,
@@ -92,11 +96,12 @@ export default {
         }
         if (batch.length > 0) await env.DB.batch(batch);
 
-        return new Response(JSON.stringify({ success: true, total_unique_bills_queued: uniqueBills.size }), { headers: corsHeaders });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
-      }
-    }
+        // NEW: Include the fetchErrors array in the output
+        return new Response(JSON.stringify({ 
+          success: true, 
+          total_unique_bills_queued: uniqueBills.size,
+          diagnostics: fetchErrors 
+        }), { headers: corsHeaders });
 
 // --- 1.5 REPORT ENDPOINT ---
     if (request.method === "GET" && url.pathname === "/generate-report") {
