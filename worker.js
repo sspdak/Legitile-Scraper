@@ -181,6 +181,17 @@ export default {
       }
     }
 
+    // --- 1.8 DB STATS ENDPOINT ---
+    if (request.method === "GET" && url.pathname === "/db-stats") {
+      const biennium = url.searchParams.get("biennium") || "2025-26";
+      try {
+        const result = await env.DB.prepare("SELECT COUNT(DISTINCT bill_number) as total FROM bill_texts WHERE biennium = ?").bind(biennium).first();
+        return new Response(JSON.stringify({ total_bills: result.total }), { headers: corsHeaders });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+      }
+    }
+    
     // --- FALLBACK ---
     return new Response("LegiTile Scraper is online.", { headers: corsHeaders });
   },
