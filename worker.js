@@ -145,11 +145,17 @@ export default {
                              xml.match(/<[^>]*?LongFriendlyName[^>]*?>\s*([^<]+)\s*<\//i);
                              
         const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//gi)];
+
+        // NEW: Pull the Title from the XML
+        const titleMatch = xml.match(/<[^>]*?ShortDescription[^>]*?>\s*([^<]+)\s*<\//i) || 
+                           xml.match(/<[^>]*?LongDescription[^>]*?>\s*([^<]+)\s*<\//i);
         
         const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].replace(/[()]/g, '').trim() : "Unknown";
         const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1].trim() : "Status Unavailable";
+        const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : "Title Unavailable";
         
-        return new Response(JSON.stringify({ sponsor, status }), { headers: corsHeaders });
+        // Return the title alongside the sponsor and status
+        return new Response(JSON.stringify({ sponsor, status, short_desc: title }), { headers: corsHeaders });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
       }
@@ -216,9 +222,14 @@ export default {
                             .replace(/\s+/g, ' ')
                             .trim();
 
+        // Updated to use DELETE first to prevent FTS5 duplicate stacking
         await env.DB.batch([
           env.DB.prepare(
-            "INSERT OR REPLACE INTO bill_texts (bill_number, biennium, full_text) VALUES (?, ?, ?)"
+            "DELETE FROM bill_texts WHERE bill_number = ? AND biennium = ?"
+          ).bind(item.bill_number, item.biennium),
+          
+          env.DB.prepare(
+            "INSERT INTO bill_texts (bill_number, biennium, full_text) VALUES (?, ?, ?)"
           ).bind(item.bill_number, item.biennium, cleanText),
           
           env.DB.prepare(
