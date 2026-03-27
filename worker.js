@@ -48,7 +48,6 @@ export default {
         ];
 
         const uniqueBills = new Map();
-        // Case-insensitive regex to catch .htm OR .HTM
         const regex = /href="([^"]+\.htm)"/gi;
 
         for (const dirUrl of directories) {
@@ -145,23 +144,35 @@ export default {
                              xml.match(/<[^>]*?LongFriendlyName[^>]*?>\s*([^<]+)\s*<\//i);
                              
         const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//gi)];
-
-        // NEW: Pull the Title from the XML
         const titleMatch = xml.match(/<[^>]*?ShortDescription[^>]*?>\s*([^<]+)\s*<\//i) || 
                            xml.match(/<[^>]*?LongDescription[^>]*?>\s*([^<]+)\s*<\//i);
+
+        // Date extraction
+        const isoDates = [...xml.matchAll(/>\s*(\d{4}-\d{2}-\d{2})T/g)].map(m => m[1]);
+        let introDate = "Unknown";
+        let lastUpdated = "Unknown";
+        
+        if (isoDates.length > 0) {
+          isoDates.sort();
+          const formatIso = (isoStr) => {
+            const parts = isoStr.split('-');
+            return new Date(parts[0], parts[1] - 1, parts[2]).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          };
+          introDate = formatIso(isoDates[0]);
+          lastUpdated = formatIso(isoDates[isoDates.length - 1]);
+        }
         
         const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].replace(/[()]/g, '').trim() : "Unknown";
         const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1].trim() : "Status Unavailable";
         const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : "Title Unavailable";
         
-        // Return the title alongside the sponsor and status
-        return new Response(JSON.stringify({ sponsor, status, short_desc: title }), { headers: corsHeaders });
+        return new Response(JSON.stringify({ sponsor, status, short_desc: title, intro_date: introDate, last_updated: lastUpdated }), { headers: corsHeaders });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
       }
     }
 
-    // --- 1.7 SAVED QUERIES (D1 Database Storage) ---
+    // --- 1.7 SAVED QUERIES ---
     if (url.pathname === "/saved-queries") {
       if (request.method === "GET") {
         try {
@@ -198,11 +209,10 @@ export default {
       }
     }
     
-    // --- FALLBACK ---
     return new Response("LegiTile Scraper is online.", { headers: corsHeaders });
   },
 
-  // --- 2. THE BACKGROUND CRON JOB ---
+  // --- 2. BACKGROUND CRON JOB ---
   async scheduled(event, env, ctx) {
     const { results: queueItems } = await env.DB.prepare(
       "SELECT * FROM scrape_queue WHERE status = 'pending' LIMIT 2"
@@ -222,7 +232,6 @@ export default {
                             .replace(/\s+/g, ' ')
                             .trim();
 
-        // Updated to use DELETE first to prevent FTS5 duplicate stacking
         await env.DB.batch([
           env.DB.prepare(
             "DELETE FROM bill_texts WHERE bill_number = ? AND biennium = ?"
