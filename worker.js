@@ -25,7 +25,7 @@ export default {
           SELECT bill_number, snippet(bill_texts, 1, '<mark class="bg-yellow-200 text-gray-900 font-bold px-1 rounded">', '</mark>', '...', 60) AS match_snippet 
           FROM bill_texts 
           WHERE biennium = ? AND bill_texts MATCH ? 
-          ORDER BY rank LIMIT 50
+          ORDER BY rank LIMIT 250
         `).bind(biennium, ftsQuery).all();
         
         return new Response(JSON.stringify(results), { headers: corsHeaders });
@@ -111,7 +111,7 @@ export default {
           LEFT JOIN scrape_queue q ON t.bill_number = q.bill_number AND t.biennium = q.biennium 
           WHERE t.biennium = ? AND t.bill_texts MATCH ? 
           ORDER BY t.rank 
-          LIMIT 100
+          LIMIT 5000
         `;
         const { results } = await env.DB.prepare(sql).bind(biennium, ftsQuery).all();
         return new Response(JSON.stringify(results), { headers: corsHeaders });
