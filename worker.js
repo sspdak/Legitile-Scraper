@@ -147,8 +147,11 @@ export default {
         const titleMatch = xml.match(/<[^>]*?ShortDescription[^>]*?>\s*([^<]+)\s*<\//i) || 
                            xml.match(/<[^>]*?LongDescription[^>]*?>\s*([^<]+)\s*<\//i);
 
-        // Date extraction
-        const isoDates = [...xml.matchAll(/>\s*(\d{4}-\d{2}-\d{2})T/g)].map(m => m[1]);
+       // Date extraction
+        const isoDates = [...xml.matchAll(/>\s*(\d{4}-\d{2}-\d{2})T/g)]
+            .map(m => m[1])
+            .filter(date => !date.startsWith('1901') && !date.startsWith('1900') && !date.startsWith('0001')); // Ignore DB placeholders
+        
         let introDate = "Unknown";
         let lastUpdated = "Unknown";
         
