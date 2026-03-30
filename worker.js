@@ -211,7 +211,47 @@ export default {
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
       }
     }
+
+    // --- 1.9 DIAGNOSTIC SCRAPE ENDPOINT ---
+    if (request.method === "GET" && url.pathname === "/test-scrape") {
+      const billNumber = url.searchParams.get("billNumber");
+      const biennium = url.searchParams.get("biennium") || "2025-26";
+
+      if (!billNumber) return new Response(JSON.stringify({ error: "Missing bill number" }), { status: 400, headers: corsHeaders });
+
+      try {
+        const queueItem = await env.DB.prepare("SELECT url FROM scrape_queue WHERE bill_number = ? AND biennium = ?").bind(billNumber, biennium).first();
+        
+        if (!queueItem) {
+          return new Response(JSON.stringify({ error: "Bill not found in scrape_queue" }), { status: 404, headers: corsHeaders });
+        }
+
+        const response = await fetch(queueItem.url);
+        if (!response.ok) {
+           return new Response(JSON.stringify({ error: "HTTP Fetch Failed", http_status: response.status, url: queueItem.url }), { headers: corsHeaders });
+        }
+        
+        const html = await response.text();
+        let cleanText = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                            .replace(/<[^>]+>/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+
+        return new Response(JSON.stringify({ 
+            success: true, 
+            url: queueItem.url,
+            original_html_length: html.length,
+            cleaned_text_length: cleanText.length,
+            preview: cleanText.substring(0, 150) + "..."
+        }), { headers: corsHeaders });
+
+      } catch (error) {
+        return new Response(JSON.stringify({ error: "Exception caught", message: error.message, stack: error.stack }), { status: 500, headers: corsHeaders });
+      }
+    }
     
+    // --- FALLBACK ---
     return new Response("LegiTile Scraper is online.", { headers: corsHeaders });
   },
 
