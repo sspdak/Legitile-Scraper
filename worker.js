@@ -273,6 +273,7 @@ export default {
                             .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
                             .replace(/<[^>]+>/g, ' ')
                             .replace(/\s+/g, ' ')
+                            .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\uFFFD]/g, '') // NEW: Strips null bytes and corrupt control characters
                             .trim();
 
         await env.DB.batch([
