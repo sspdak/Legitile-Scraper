@@ -288,6 +288,13 @@ export default {
                             .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\uFFFD]/g, '')
                             .trim();
 
+        // The Bookend Truncation Method
+        if (cleanText.length > 900000) {
+            const topChunk = cleanText.substring(0, 500000);
+            const bottomChunk = cleanText.substring(cleanText.length - 400000);
+            cleanText = topChunk + " ...[TEXT TRUNCATED FOR SIZE]... " + bottomChunk;
+        }
+
         await env.DB.batch([
           env.DB.prepare(
             "DELETE FROM bill_texts WHERE bill_number = ? AND biennium = ?"
