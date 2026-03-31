@@ -258,7 +258,7 @@ export default {
   // --- 2. BACKGROUND CRON JOB ---
   async scheduled(event, env, ctx) {
     const { results: queueItems } = await env.DB.prepare(
-      "SELECT * FROM scrape_queue WHERE status = 'pending' LIMIT 2"
+      "SELECT * FROM scrape_queue WHERE status = 'pending' LIMIT 10"
     ).all();
 
     if (!queueItems || queueItems.length === 0) return;
