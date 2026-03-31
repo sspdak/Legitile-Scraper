@@ -34,6 +34,18 @@ export default {
       }
     }
 
+    // --- 1.1b GET TRACKED SESSIONS ---
+    if (request.method === "GET" && url.pathname === "/get-bienniums") {
+      try {
+        const { results } = await env.DB.prepare("SELECT DISTINCT biennium FROM scrape_queue ORDER BY biennium DESC").all();
+        let bienniums = results.map(r => r.biennium);
+        if (bienniums.length === 0) bienniums = ["2025-26"]; // Fallback
+        return new Response(JSON.stringify(bienniums), { headers: corsHeaders });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+      }
+    }
+
     // --- 1.2 MASTER AUTO-FEEDER ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
@@ -147,10 +159,10 @@ export default {
         const titleMatch = xml.match(/<[^>]*?ShortDescription[^>]*?>\s*([^<]+)\s*<\//i) || 
                            xml.match(/<[^>]*?LongDescription[^>]*?>\s*([^<]+)\s*<\//i);
 
-       // Date extraction
+        // Date extraction
         const isoDates = [...xml.matchAll(/>\s*(\d{4}-\d{2}-\d{2})T/g)]
             .map(m => m[1])
-            .filter(date => !date.startsWith('1901') && !date.startsWith('1900') && !date.startsWith('0001')); // Ignore DB placeholders
+            .filter(date => !date.startsWith('1901') && !date.startsWith('1900') && !date.startsWith('0001'));
         
         let introDate = "Unknown";
         let lastUpdated = "Unknown";
@@ -273,7 +285,7 @@ export default {
                             .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
                             .replace(/<[^>]+>/g, ' ')
                             .replace(/\s+/g, ' ')
-                            .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\uFFFD]/g, '') // NEW: Strips null bytes and corrupt control characters
+                            .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\uFFFD]/g, '')
                             .trim();
 
         await env.DB.batch([
