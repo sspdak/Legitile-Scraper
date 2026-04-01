@@ -119,7 +119,7 @@ export default {
       }
     }
 
-    // --- 1.5 PROXY ENDPOINT FOR BILL STATUS ---
+// --- 1.5 PROXY ENDPOINT FOR BILL STATUS ---
     if (request.method === "GET" && url.pathname === "/get-bill-status") {
       const billNumber = url.searchParams.get("billNumber");
       const biennium = url.searchParams.get("biennium") || "2025-26";
@@ -127,27 +127,31 @@ export default {
       if (!billNumber) return new Response(JSON.stringify({ error: "Missing bill number" }), { status: 400, headers: corsHeaders });
 
       try {
-        const reqBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetLegislation xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${biennium}</biennium><billNumber>${billNumber.replace(/\D/g, '')}</billNumber></GetLegislation></soap:Body></soap:Envelope>`;
+        // Fetch from all 3 WSL endpoints to get comprehensive data
+        const fetchWSL = async (op, body) => {
+          const res = await fetch(`https://wslwebservices.leg.wa.gov/LegislationService.asmx`, {
+            method: "POST",
+            headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": `http://WSLWebServices.leg.wa.gov/${op}` },
+            body: `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>${body}</soap:Body></soap:Envelope>`
+          });
+          return (await res.text()).replace(/<\?xml.*?\?>/i, "");
+        };
+
+        const calls = [
+          { op: "GetLegislation", body: `<GetLegislation xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${biennium}</biennium><billNumber>${billNumber.replace(/\D/g, '')}</billNumber></GetLegislation>` },
+          { op: "GetSponsors", body: `<GetSponsors xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${biennium}</biennium><billId>${billNumber.replace(/\D/g, '')}</billId></GetSponsors>` },
+          { op: "GetCurrentStatus", body: `<GetCurrentStatus xmlns="http://WSLWebServices.leg.wa.gov/"><biennium>${biennium}</biennium><billNumber>${billNumber.replace(/\D/g, '')}</billNumber></GetCurrentStatus>` }
+        ];
         
-        const apiRes = await fetch("https://wslwebservices.leg.wa.gov/LegislationService.asmx", {
-          method: "POST",
-          headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "http://WSLWebServices.leg.wa.gov/GetLegislation" },
-          body: reqBody
-        });
+        const results = await Promise.all(calls.map(c => fetchWSL(c.op, c.body)));
+        const xml = `<Root>${results.join('')}</Root>`;
         
-        const xml = await apiRes.text();
-        
-        const sponsorMatch = xml.match(/<[^>]*?OriginalSponsor[^>]*?>\s*([^<]+)\s*<\//i) || xml.match(/<[^>]*?SponsorName[^>]*?>\s*([^<]+)\s*<\//i);
-        const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//gi)];
+        const statusMatch = xml.match(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//i);
         const titleMatch = xml.match(/<[^>]*?ShortDescription[^>]*?>\s*([^<]+)\s*<\//i);
 
-        const isoDates = [...xml.matchAll(/>\s*(\d{4}-\d{2}-\d{2})T/g)]
-            .map(m => m[1])
-            .filter(date => !date.startsWith('1901') && !date.startsWith('1900') && !date.startsWith('0001'));
+        const isoDates = [...xml.matchAll(/>\s*(\d{4}-\d{2}-\d{2})T/g)].map(m => m[1]).filter(date => !date.startsWith('1901') && !date.startsWith('1900') && !date.startsWith('0001'));
         
-        let introDate = "Unknown";
-        let lastUpdated = "Unknown";
-        
+        let introDate = "Unknown", lastUpdated = "Unknown";
         if (isoDates.length > 0) {
           isoDates.sort();
           const formatIso = (isoStr) => {
@@ -158,8 +162,14 @@ export default {
           lastUpdated = formatIso(isoDates[isoDates.length - 1]);
         }
         
-        const sponsor = sponsorMatch && sponsorMatch[1] ? sponsorMatch[1].replace(/[()]/g, '').trim() : "Unknown";
-        const status = statusMatches.length > 0 ? statusMatches[statusMatches.length - 1][1].trim() : "Status Unavailable";
+        // Safely extract the primary sponsor
+        let sponsor = "Unknown";
+        const sponsorMatch = xml.match(/<Name>([^<]+)<\/Name>/i);
+        if (sponsorMatch && sponsorMatch[1]) {
+            sponsor = sponsorMatch[1].trim();
+        }
+
+        const status = statusMatch && statusMatch[1] ? statusMatch[1].trim() : "Status Unavailable";
         const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : "Title Unavailable";
         
         return new Response(JSON.stringify({ sponsor, status, short_desc: title, intro_date: introDate, last_updated: lastUpdated }), { headers: corsHeaders });
