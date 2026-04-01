@@ -12,41 +12,19 @@ export default {
 
     const url = new URL(request.url);
 
-    // --- 1.1 SEARCH ENDPOINT ---
-    if (request.method === "GET" && url.pathname === "/search") {
-      const query = url.searchParams.get("q");
-      const biennium = url.searchParams.get("biennium") || "2025-26";
-      
-      if (!query) return new Response(JSON.stringify({ error: "Missing query" }), { status: 400, headers: corsHeaders });
-      
-      try {
-        const ftsQuery = `"${query.replace(/"/g, '""')}"`; 
-        const { results } = await env.DB.prepare(`
-          SELECT bill_number, snippet(bill_texts, 1, '<mark class="bg-yellow-200 text-gray-900 font-bold px-1 rounded">', '</mark>', '...', 60) AS match_snippet 
-          FROM bill_texts 
-          WHERE biennium = ? AND bill_texts MATCH ? 
-          ORDER BY rank LIMIT 250
-        `).bind(biennium, ftsQuery).all();
-        
-        return new Response(JSON.stringify(results), { headers: corsHeaders });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
-      }
-    }
-
-    // --- 1.1b GET TRACKED SESSIONS ---
+    // --- 1.1 GET TRACKED SESSIONS ---
     if (request.method === "GET" && url.pathname === "/get-bienniums") {
       try {
         const { results } = await env.DB.prepare("SELECT DISTINCT biennium FROM scrape_queue ORDER BY biennium DESC").all();
         let bienniums = results.map(r => r.biennium);
-        if (bienniums.length === 0) bienniums = ["2025-26"]; // Fallback
+        if (bienniums.length === 0) bienniums = ["2025-26"]; 
         return new Response(JSON.stringify(bienniums), { headers: corsHeaders });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
       }
     }
 
-    // --- 1.2 MASTER AUTO-FEEDER ---
+    // --- 1.2 HISTORICAL AUTO-FEEDER ---
     if (request.method === "POST" && url.pathname === "/build-database") {
       try {
         const { biennium } = await request.json();
@@ -59,7 +37,7 @@ export default {
           `https://lawfilesext.leg.wa.gov/biennium/${biennium}/Htm/Bills/Senate%20Passed%20Legislature/`
         ];
 
-        const uniqueBills = new Map();
+        const allFiles = new Set();
         const regex = /href="([^"]+\.htm)"/gi;
 
         for (const dirUrl of directories) {
@@ -75,25 +53,19 @@ export default {
             const billNumMatch = fileName.match(/^(\d{4})/);
 
             if (billNumMatch) {
-              const billNum = billNumMatch[1];
-              if (!uniqueBills.has(billNum) || fileName.length > uniqueBills.get(billNum).fileName.length) {
-                uniqueBills.set(billNum, {
-                  billNumber: billNum,
-                  url: fileHref.startsWith('http') ? fileHref : (fileHref.startsWith('/') ? `https://lawfilesext.leg.wa.gov${fileHref}` : `${dirUrl}${fileHref}`),
-                  fileName: fileName,
-                  biennium: biennium
-                });
-              }
+              const fullUrl = fileHref.startsWith('http') ? fileHref : (fileHref.startsWith('/') ? `https://lawfilesext.leg.wa.gov${fileHref}` : `${dirUrl}${fileHref}`);
+              allFiles.add(JSON.stringify({ billNumber: billNumMatch[1], url: fullUrl, biennium: biennium }));
             }
           }
         }
 
         const insertStmt = env.DB.prepare(
-          "INSERT OR REPLACE INTO scrape_queue (bill_number, url, biennium, status) VALUES (?, ?, ?, 'pending')"
+          "INSERT OR IGNORE INTO scrape_queue (bill_number, url, biennium, status) VALUES (?, ?, ?, 'pending')"
         );
         
         const batch = [];
-        for (const bill of uniqueBills.values()) {
+        for (const fileStr of allFiles) {
+          const bill = JSON.parse(fileStr);
           batch.push(insertStmt.bind(bill.billNumber, bill.url, bill.biennium));
           if (batch.length === 50) { 
             await env.DB.batch(batch); 
@@ -102,13 +74,29 @@ export default {
         }
         if (batch.length > 0) await env.DB.batch(batch);
 
-        return new Response(JSON.stringify({ success: true, total_unique_bills_queued: uniqueBills.size }), { headers: corsHeaders });
+        return new Response(JSON.stringify({ success: true, total_files_queued: allFiles.size }), { headers: corsHeaders });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
       }
     }
 
-    // --- 1.5 REPORT ENDPOINT ---
+    // --- 1.3 URL DIRECTORY (For identifying ghost phrases) ---
+    if (request.method === "GET" && url.pathname === "/all-urls") {
+      const biennium = url.searchParams.get("biennium") || "2025-26";
+      try {
+        const { results } = await env.DB.prepare("SELECT bill_number, url FROM scrape_queue WHERE biennium = ? AND status = 'completed'").bind(biennium).all();
+        const map = {};
+        results.forEach(r => {
+            if(!map[r.bill_number]) map[r.bill_number] = [];
+            map[r.bill_number].push(r.url);
+        });
+        return new Response(JSON.stringify(map), { headers: corsHeaders });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+      }
+    }
+
+    // --- 1.4 REPORT ENDPOINT ---
     if (request.method === "GET" && url.pathname === "/generate-report") {
       const query = url.searchParams.get("q");
       const biennium = url.searchParams.get("biennium") || "2025-26";
@@ -118,11 +106,10 @@ export default {
       try {
         const ftsQuery = `"${query.replace(/"/g, '""')}"`; 
         const sql = `
-          SELECT t.bill_number, t.full_text, q.url 
-          FROM bill_texts t 
-          LEFT JOIN scrape_queue q ON t.bill_number = q.bill_number AND t.biennium = q.biennium 
-          WHERE t.biennium = ? AND t.bill_texts MATCH ? 
-          ORDER BY t.rank 
+          SELECT bill_number, url, full_text 
+          FROM bill_texts 
+          WHERE biennium = ? AND bill_texts MATCH ? 
+          ORDER BY rank 
           LIMIT 5000
         `;
         const { results } = await env.DB.prepare(sql).bind(biennium, ftsQuery).all();
@@ -132,7 +119,7 @@ export default {
       }
     }
 
-    // --- 1.6 PROXY ENDPOINT FOR BILL STATUS ---
+    // --- 1.5 PROXY ENDPOINT FOR BILL STATUS ---
     if (request.method === "GET" && url.pathname === "/get-bill-status") {
       const billNumber = url.searchParams.get("billNumber");
       const biennium = url.searchParams.get("biennium") || "2025-26";
@@ -150,16 +137,10 @@ export default {
         
         const xml = await apiRes.text();
         
-        const sponsorMatch = xml.match(/<[^>]*?OriginalSponsor[^>]*?>\s*([^<]+)\s*<\//i) || 
-                             xml.match(/<[^>]*?SponsorName[^>]*?>\s*([^<]+)\s*<\//i) ||
-                             xml.match(/<[^>]*?Sponsor[^>]*?>\s*([^<]+)\s*<\//i) ||
-                             xml.match(/<[^>]*?LongFriendlyName[^>]*?>\s*([^<]+)\s*<\//i);
-                             
+        const sponsorMatch = xml.match(/<[^>]*?OriginalSponsor[^>]*?>\s*([^<]+)\s*<\//i) || xml.match(/<[^>]*?SponsorName[^>]*?>\s*([^<]+)\s*<\//i);
         const statusMatches = [...xml.matchAll(/<[^>]*?HistoryLine[^>]*?>\s*([^<]+)\s*<\//gi)];
-        const titleMatch = xml.match(/<[^>]*?ShortDescription[^>]*?>\s*([^<]+)\s*<\//i) || 
-                           xml.match(/<[^>]*?LongDescription[^>]*?>\s*([^<]+)\s*<\//i);
+        const titleMatch = xml.match(/<[^>]*?ShortDescription[^>]*?>\s*([^<]+)\s*<\//i);
 
-        // Date extraction
         const isoDates = [...xml.matchAll(/>\s*(\d{4}-\d{2}-\d{2})T/g)]
             .map(m => m[1])
             .filter(date => !date.startsWith('1901') && !date.startsWith('1900') && !date.startsWith('0001'));
@@ -187,7 +168,7 @@ export default {
       }
     }
 
-    // --- 1.7 SAVED QUERIES ---
+    // --- 1.6 SAVED QUERIES ---
     if (url.pathname === "/saved-queries") {
       if (request.method === "GET") {
         try {
@@ -213,53 +194,14 @@ export default {
       }
     }
 
-    // --- 1.8 DB STATS ENDPOINT ---
+    // --- 1.7 DB STATS ENDPOINT ---
     if (request.method === "GET" && url.pathname === "/db-stats") {
       const biennium = url.searchParams.get("biennium") || "2025-26";
       try {
-        const result = await env.DB.prepare("SELECT COUNT(DISTINCT bill_number) as total FROM bill_texts WHERE biennium = ?").bind(biennium).first();
+        const result = await env.DB.prepare("SELECT COUNT(DISTINCT bill_number) as total FROM scrape_queue WHERE biennium = ? AND status = 'completed'").bind(biennium).first();
         return new Response(JSON.stringify({ total_bills: result.total }), { headers: corsHeaders });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
-      }
-    }
-
-    // --- 1.9 DIAGNOSTIC SCRAPE ENDPOINT ---
-    if (request.method === "GET" && url.pathname === "/test-scrape") {
-      const billNumber = url.searchParams.get("billNumber");
-      const biennium = url.searchParams.get("biennium") || "2025-26";
-
-      if (!billNumber) return new Response(JSON.stringify({ error: "Missing bill number" }), { status: 400, headers: corsHeaders });
-
-      try {
-        const queueItem = await env.DB.prepare("SELECT url FROM scrape_queue WHERE bill_number = ? AND biennium = ?").bind(billNumber, biennium).first();
-        
-        if (!queueItem) {
-          return new Response(JSON.stringify({ error: "Bill not found in scrape_queue" }), { status: 404, headers: corsHeaders });
-        }
-
-        const response = await fetch(queueItem.url);
-        if (!response.ok) {
-           return new Response(JSON.stringify({ error: "HTTP Fetch Failed", http_status: response.status, url: queueItem.url }), { headers: corsHeaders });
-        }
-        
-        const html = await response.text();
-        let cleanText = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-                            .replace(/<[^>]+>/g, ' ')
-                            .replace(/\s+/g, ' ')
-                            .trim();
-
-        return new Response(JSON.stringify({ 
-            success: true, 
-            url: queueItem.url,
-            original_html_length: html.length,
-            cleaned_text_length: cleanText.length,
-            preview: cleanText.substring(0, 150) + "..."
-        }), { headers: corsHeaders });
-
-      } catch (error) {
-        return new Response(JSON.stringify({ error: "Exception caught", message: error.message, stack: error.stack }), { status: 500, headers: corsHeaders });
       }
     }
     
@@ -288,7 +230,6 @@ export default {
                             .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\uFFFD]/g, '')
                             .trim();
 
-        // The Bookend Truncation Method
         if (cleanText.length > 900000) {
             const topChunk = cleanText.substring(0, 500000);
             const bottomChunk = cleanText.substring(cleanText.length - 400000);
@@ -297,12 +238,12 @@ export default {
 
         await env.DB.batch([
           env.DB.prepare(
-            "DELETE FROM bill_texts WHERE bill_number = ? AND biennium = ?"
-          ).bind(item.bill_number, item.biennium),
+            "DELETE FROM bill_texts WHERE url = ?"
+          ).bind(item.url),
           
           env.DB.prepare(
-            "INSERT INTO bill_texts (bill_number, biennium, full_text) VALUES (?, ?, ?)"
-          ).bind(item.bill_number, item.biennium, cleanText),
+            "INSERT INTO bill_texts (bill_number, biennium, url, full_text) VALUES (?, ?, ?, ?)"
+          ).bind(item.bill_number, item.biennium, item.url, cleanText),
           
           env.DB.prepare(
             "UPDATE scrape_queue SET status = 'completed', last_scraped = CURRENT_TIMESTAMP WHERE id = ?"
